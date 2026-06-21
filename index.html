@@ -19,6 +19,7 @@
         .btn-play { background-color: #2196F3; }
         .btn-hint { background-color: #9c27b0; } 
         .btn-answer { background-color: #ff9800; }
+        .btn-prev { background-color: #607d8b; }
         select { background-color: #1e1e24; color: white; border: 1px solid #444; padding: 8px; border-radius: 5px; cursor: pointer; }
         
         #visualFeedback { min-height: 40px; background-color: #1a1a20; border: 1px dashed #444; border-radius: 5px; padding: 10px; margin-bottom: 10px; font-size: 18px; display: none; line-height: 1.5; }
@@ -60,8 +61,9 @@
             <div id="statusMessage"></div>
 
             <div class="controls">
-                <button id="btnHintWord" class="btn-hint" disabled>Gợi ý từ tiếp theo (Enter x2)</button>
+                <button id="btnHintWord" class="btn-hint" disabled>Gợi ý từ (Enter x2)</button>
                 <button id="btnShowAnswer" class="btn-answer" disabled>Xem đáp án</button>
+                <button id="btnPrev" class="btn-prev" disabled>⏮ Câu trước</button>
                 <button id="btnNext" disabled>Câu tiếp theo ⏭</button>
             </div>
 
@@ -81,6 +83,7 @@
         const btnPlay = document.getElementById('btnPlay');
         const btnHintWord = document.getElementById('btnHintWord');
         const btnShowAnswer = document.getElementById('btnShowAnswer');
+        const btnPrev = document.getElementById('btnPrev');
         const btnNext = document.getElementById('btnNext');
         const userInput = document.getElementById('userInput');
         
@@ -95,6 +98,9 @@
         let isPlayingSegment = false;
         let lastEnterTime = 0;
         let isSentenceCompleted = false;
+        
+        // BIẾN MỚI: Bộ nhớ nháp lưu trữ từng chữ đang gõ của mọi câu
+        let userDrafts = {}; 
 
         videoUpload.addEventListener('change', e => { if(e.target.files[0]) videoPlayer.src = URL.createObjectURL(e.target.files[0]); });
         
@@ -103,13 +109,16 @@
                 const reader = new FileReader();
                 reader.onload = e => {
                     subtitles = parseSRT(e.target.result);
-                    if(subtitles.length > 0) { enableControls(); loadCurrentSubtitle(); }
+                    if(subtitles.length > 0) { 
+                        userDrafts = {}; // Reset toàn bộ nháp khi tải bài mới
+                        enableControls(); 
+                        loadCurrentSubtitle(); 
+                    }
                 };
                 reader.readAsText(e.target.files[0]);
             }
         });
 
-        // Xử lý thay đổi tốc độ
         speedControl.addEventListener('change', function() {
             videoPlayer.playbackRate = parseFloat(this.value);
         });
@@ -118,9 +127,19 @@
             const regex = /(?:\d+)\s+(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\s+([\s\S]*?)(?=\n\s*\n|\s*$)/g;
             let match, subs = [];
             while ((match = regex.exec(data)) !== null) {
-                // Thêm regex để lột bỏ toàn bộ thẻ HTML rác như <i>, <b>, <font>
-                let rawText = match[3].replace(/<[^>]+>/g, '');
-                subs.push({ start: timeToSeconds(match[1]), end: timeToSeconds(match[2]), text: rawText.replace(/\n/g, ' ').trim() });
+                let rawText = match[3].replace(/<[^>]+>/g, '').replace(/\[.*?\]/g, '');
+                let cleanText = rawText.replace(/\n/g, ' ').trim();
+                
+                if (cleanText.length > 0) {
+                    subs.push({ 
+                        start: timeToSeconds(match[1]), 
+                        end: timeToSeconds(match[2]), 
+                        text: cleanText 
+                    });
+                }
+            }
+            for (let i = 0; i < subs.length - 1; i++) {
+                subs[i].end = subs[i + 1].start;
             }
             return subs;
         }
@@ -131,21 +150,28 @@
         }
 
         function enableControls() {
-            btnPlay.disabled = btnHintWord.disabled = btnShowAnswer.disabled = btnNext.disabled = userInput.disabled = speedControl.disabled = false;
+            btnPlay.disabled = btnHintWord.disabled = btnShowAnswer.disabled = btnPrev.disabled = btnNext.disabled = userInput.disabled = speedControl.disabled = false;
         }
 
         function loadCurrentSubtitle() {
             if (currentIndex >= subtitles.length) return;
-            isSentenceCompleted = false;
-            userInput.value = '';
+            
+            // Xóa giao diện cũ
             visualFeedback.style.display = 'none';
             visualFeedback.innerHTML = '';
             answerBox.style.display = 'none';
             statusMessage.innerHTML = '';
             progressText.innerText = `${currentIndex + 1} / ${subtitles.length}`;
-            
-            // Khôi phục lại tốc độ phát đã chọn mỗi khi sang câu mới
             videoPlayer.playbackRate = parseFloat(speedControl.value);
+            
+            // Lấy lại dữ liệu đang gõ dở (nếu có)
+            userInput.value = userDrafts[currentIndex] || '';
+            isSentenceCompleted = false; 
+
+            // Nếu câu này đã từng gõ, tự động kiểm tra lại để hiện màu sắc đỏ/xanh luôn
+            if (userInput.value.trim() !== '') {
+                checkDictationLogic();
+            }
             
             userInput.focus();
             playCurrentSegment();
@@ -169,11 +195,23 @@
         btnPlay.addEventListener('click', playCurrentSegment);
         
         btnShowAnswer.addEventListener('click', () => {
-            correctAnswerText.innerText = subtitles[currentIndex].text;
+            const currentTarget = subtitles[currentIndex].text;
+            correctAnswerText.innerText = currentTarget;
             answerBox.style.display = 'block';
+            
+            userInput.value = currentTarget;
+            checkDictationLogic();
+            userInput.focus();
+        });
+
+        // BẮT SỰ KIỆN: Lưu lại bản nháp ngay trước khi chuyển câu
+        btnPrev.addEventListener('click', () => {
+            userDrafts[currentIndex] = userInput.value;
+            if (currentIndex > 0) { currentIndex--; loadCurrentSubtitle(); }
         });
 
         btnNext.addEventListener('click', () => {
+            userDrafts[currentIndex] = userInput.value;
             if (currentIndex < subtitles.length - 1) { currentIndex++; loadCurrentSubtitle(); }
         });
 
@@ -185,17 +223,24 @@
         });
 
         function cleanWord(word) {
-            return word.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "").trim();
+            return word.toLowerCase()
+                       .replace(/['’‘´]/g, "") 
+                       .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()"]/g, "") 
+                       .trim();
         }
 
         function checkDictationLogic() {
             const currentTarget = subtitles[currentIndex].text;
             const targetWordsRaw = currentTarget.trim().split(/\s+/);
-            const userWordsRaw = userInput.value.trim().split(/\s+/).filter(w => w !== "");
+            
+            const originalText = userInput.value;
+            const userWordsRaw = originalText.trim().split(/\s+/).filter(w => w !== "");
 
             if (userWordsRaw.length === 0) return;
 
-            let visualHTML = ""; let newTextareaValue = ""; let isPerfect = true;
+            let visualHTML = ""; 
+            let newTextareaValue = ""; 
+            let isPerfect = true;
 
             for (let i = 0; i < userWordsRaw.length; i++) {
                 const uWordClean = cleanWord(userWordsRaw[i]);
@@ -203,22 +248,38 @@
 
                 if (tWordClean && uWordClean === tWordClean) {
                     visualHTML += `<span class="word-correct">${targetWordsRaw[i]}</span> `;
-                    newTextareaValue += targetWordsRaw[i] + " ";
+                    newTextareaValue += targetWordsRaw[i] + " "; 
                 } else {
                     visualHTML += `<span class="word-incorrect">${userWordsRaw[i]}</span> `;
-                    newTextareaValue += userWordsRaw[i] + " ";
+                    newTextareaValue += userWordsRaw[i];
+                    if (i < userWordsRaw.length - 1) {
+                        newTextareaValue += " ";
+                    }
                     isPerfect = false;
                 }
             }
 
-            visualFeedback.innerHTML = visualHTML.trim(); visualFeedback.style.display = 'block';
+            if (originalText.endsWith(" ") || originalText.endsWith("\n")) {
+                if (!newTextareaValue.endsWith(" ")) {
+                    newTextareaValue += " ";
+                }
+            }
+
+            visualFeedback.innerHTML = visualHTML.trim(); 
+            visualFeedback.style.display = 'block';
             userInput.value = newTextareaValue;
 
             if (isPerfect && userWordsRaw.length === targetWordsRaw.length) {
                 statusMessage.innerHTML = '<span class="text-success">✔ Chính xác!</span><span class="text-hint">(Nhấn Enter để sang câu tiếp theo)</span>';
                 userInput.value = currentTarget; 
                 isSentenceCompleted = true;
-            } else { statusMessage.innerHTML = ''; isSentenceCompleted = false; }
+            } else { 
+                statusMessage.innerHTML = ''; 
+                isSentenceCompleted = false; 
+            }
+            
+            // Lưu lại văn bản đã được kiểm tra (chỉnh sửa dấu phẩy, viết hoa) vào bản nháp
+            userDrafts[currentIndex] = userInput.value;
         }
 
         function triggerHint() {
@@ -240,6 +301,17 @@
         }
         
         btnHintWord.addEventListener('click', triggerHint);
+
+        // BẮT SỰ KIỆN: Tự động lưu bản nháp mỗi khi người dùng gõ phím
+        userInput.addEventListener('input', function() {
+            userDrafts[currentIndex] = userInput.value; // Lưu ngầm ngay lập tức
+            
+            if (isSentenceCompleted) {
+                isSentenceCompleted = false;
+                statusMessage.innerHTML = '';
+                visualFeedback.style.display = 'none';
+            }
+        });
 
         userInput.addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
