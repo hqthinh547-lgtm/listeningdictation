@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title> Dictation App</title>
+    <title>Advanced Dictation App</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1e1e24; color: #ffffff; margin: 0; padding: 20px; }
         .header { text-align: center; margin-bottom: 20px; }
@@ -30,11 +30,13 @@
         #statusMessage { margin-bottom: 15px; font-weight: bold; }
         .text-success { color: #4CAF50; }
         .text-hint { color: #9c27b0; font-size: 14px; font-style: italic; margin-left: 10px;}
+        .text-finish { color: #ffeb3b; font-size: 18px; display: block; margin-top: 5px; animation: blink 1.5s infinite; }
+        @keyframes blink { 50% { opacity: 0.5; } }
         .answer-box { background-color: #1e1e24; padding: 15px; border-radius: 5px; border: 1px solid #444; display: none; margin-top: 15px; }
     </style>
 </head>
 <body>
-    <div class="header"><h2> Dictation App</h2></div>
+    <div class="header"><h2>Advanced Dictation App</h2></div>
 
     <div class="upload-section">
         <div><label>1. Video (.mp4): </label><input type="file" id="videoUpload" accept="video/mp4,video/webm"></div>
@@ -61,7 +63,7 @@
             <div id="statusMessage"></div>
 
             <div class="controls">
-                <button id="btnHintWord" class="btn-hint" disabled>Gợi ý từ (Enter x2)</button>
+                <button id="btnHintWord" class="btn-hint" disabled>Gợi ý từ (Phím =)</button>
                 <button id="btnShowAnswer" class="btn-answer" disabled>Xem đáp án</button>
                 <button id="btnPrev" class="btn-prev" disabled>⏮ Câu trước</button>
                 <button id="btnNext" disabled>Câu tiếp theo ⏭</button>
@@ -99,23 +101,70 @@
         let lastEnterTime = 0;
         let isSentenceCompleted = false;
         
-        // BIẾN MỚI: Bộ nhớ nháp lưu trữ từng chữ đang gõ của mọi câu
         let userDrafts = {}; 
+        let userProgress = {};
+        let currentSrtName = "";
 
-        videoUpload.addEventListener('change', e => { if(e.target.files[0]) videoPlayer.src = URL.createObjectURL(e.target.files[0]); });
+        function saveProgressToLocal() {
+            if (!currentSrtName) return;
+            try {
+                const dataToSave = {
+                    currentIndex: currentIndex,
+                    userDrafts: userDrafts,
+                    userProgress: userProgress
+                };
+                localStorage.setItem('dictation_' + currentSrtName, JSON.stringify(dataToSave));
+            } catch (e) {}
+        }
+
+        function clearProgressFromLocal() {
+            if (!currentSrtName) return;
+            try {
+                localStorage.removeItem('dictation_' + currentSrtName);
+            } catch (e) {}
+        }
+
+        videoUpload.addEventListener('click', function() { this.value = null; });
+        videoUpload.addEventListener('change', e => { 
+            if(e.target.files[0]) {
+                videoPlayer.src = URL.createObjectURL(e.target.files[0]); 
+            }
+        });
         
+        srtUpload.addEventListener('click', function() { this.value = null; });
         srtUpload.addEventListener('change', e => {
             if(e.target.files[0]) {
+                const file = e.target.files[0];
+                currentSrtName = file.name;
                 const reader = new FileReader();
                 reader.onload = e => {
                     subtitles = parseSRT(e.target.result);
                     if(subtitles.length > 0) { 
-                        userDrafts = {}; // Reset toàn bộ nháp khi tải bài mới
+                        try {
+                            const savedData = localStorage.getItem('dictation_' + currentSrtName);
+                            if (savedData) {
+                                const parsedData = JSON.parse(savedData);
+                                currentIndex = parsedData.currentIndex || 0;
+                                userDrafts = parsedData.userDrafts || {};
+                                userProgress = parsedData.userProgress || {};
+                            } else {
+                                currentIndex = 0;
+                                userDrafts = {}; 
+                                userProgress = {};
+                            }
+                        } catch (error) {
+                            currentIndex = 0;
+                            userDrafts = {}; 
+                            userProgress = {};
+                        }
+
                         enableControls(); 
                         loadCurrentSubtitle(); 
+                    } else {
+                        alert("Không thể đọc phụ đề. Vui lòng kiểm tra lại định dạng file SRT.");
                     }
                 };
-                reader.readAsText(e.target.files[0]);
+                reader.readAsText(file);
             }
         });
 
@@ -156,7 +205,6 @@
         function loadCurrentSubtitle() {
             if (currentIndex >= subtitles.length) return;
             
-            // Xóa giao diện cũ
             visualFeedback.style.display = 'none';
             visualFeedback.innerHTML = '';
             answerBox.style.display = 'none';
@@ -164,15 +212,14 @@
             progressText.innerText = `${currentIndex + 1} / ${subtitles.length}`;
             videoPlayer.playbackRate = parseFloat(speedControl.value);
             
-            // Lấy lại dữ liệu đang gõ dở (nếu có)
             userInput.value = userDrafts[currentIndex] || '';
             isSentenceCompleted = false; 
 
-            // Nếu câu này đã từng gõ, tự động kiểm tra lại để hiện màu sắc đỏ/xanh luôn
             if (userInput.value.trim() !== '') {
                 checkDictationLogic();
             }
             
+            saveProgressToLocal(); 
             userInput.focus();
             playCurrentSegment();
         }
@@ -186,6 +233,7 @@
 
         videoPlayer.addEventListener('timeupdate', () => {
             if (!isPlayingSegment || subtitles.length === 0) return;
+            // Kiểm tra mốc kết thúc câu, chỉ tự động ngắt khi nó đang ở trạng thái phát câu theo kịch bản
             if (videoPlayer.currentTime >= subtitles[currentIndex].end) {
                 videoPlayer.pause();
                 isPlayingSegment = false;
@@ -204,7 +252,6 @@
             userInput.focus();
         });
 
-        // BẮT SỰ KIỆN: Lưu lại bản nháp ngay trước khi chuyển câu
         btnPrev.addEventListener('click', () => {
             userDrafts[currentIndex] = userInput.value;
             if (currentIndex > 0) { currentIndex--; loadCurrentSubtitle(); }
@@ -215,8 +262,9 @@
             if (currentIndex < subtitles.length - 1) { currentIndex++; loadCurrentSubtitle(); }
         });
 
+        // Bắt phím Shift chung (nếu người dùng đang trỏ ở ngoài Textarea)
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey) {
+            if (e.key === 'Shift' && !e.ctrlKey && !e.altKey && !e.metaKey && document.activeElement !== userInput) {
                 e.preventDefault(); 
                 playCurrentSegment();
             }
@@ -270,16 +318,25 @@
             userInput.value = newTextareaValue;
 
             if (isPerfect && userWordsRaw.length === targetWordsRaw.length) {
-                statusMessage.innerHTML = '<span class="text-success">✔ Chính xác!</span><span class="text-hint">(Nhấn Enter để sang câu tiếp theo)</span>';
                 userInput.value = currentTarget; 
                 isSentenceCompleted = true;
+                userProgress[currentIndex] = currentTarget;
+                userDrafts[currentIndex] = currentTarget;
+                
+                if (currentIndex === subtitles.length - 1) {
+                    statusMessage.innerHTML = '<span class="text-success">✔ Chính xác!</span><span class="text-finish">🎉 CHÚC MỪNG BẠN ĐÃ HOÀN THÀNH BÀI HỌC NÀY! 🎉</span>';
+                    clearProgressFromLocal(); 
+                } else {
+                    statusMessage.innerHTML = '<span class="text-success">✔ Chính xác!</span><span class="text-hint">(Nhấn Enter để sang câu tiếp theo)</span>';
+                    saveProgressToLocal(); 
+                }
             } else { 
                 statusMessage.innerHTML = ''; 
                 isSentenceCompleted = false; 
+                delete userProgress[currentIndex];
+                userDrafts[currentIndex] = userInput.value;
+                saveProgressToLocal();
             }
-            
-            // Lưu lại văn bản đã được kiểm tra (chỉnh sửa dấu phẩy, viết hoa) vào bản nháp
-            userDrafts[currentIndex] = userInput.value;
         }
 
         function triggerHint() {
@@ -302,9 +359,9 @@
         
         btnHintWord.addEventListener('click', triggerHint);
 
-        // BẮT SỰ KIỆN: Tự động lưu bản nháp mỗi khi người dùng gõ phím
         userInput.addEventListener('input', function() {
-            userDrafts[currentIndex] = userInput.value; // Lưu ngầm ngay lập tức
+            userDrafts[currentIndex] = userInput.value;
+            saveProgressToLocal(); 
             
             if (isSentenceCompleted) {
                 isSentenceCompleted = false;
@@ -313,14 +370,58 @@
             }
         });
 
+        // --- CẬP NHẬT LÕI XỬ LÝ PHÍM BẤM ĐA NĂNG ---
         userInput.addEventListener('keydown', function(e) {
+            
+            // 0. Phím "-" (Pause / Tua lại 1 giây và Phát)
+            if (e.key === '-') {
+                e.preventDefault(); // Ngăn in dấu "-" vào ô nháp
+                if (!videoPlayer.paused) {
+                    // Đang phát -> Dừng
+                    videoPlayer.pause();
+                    isPlayingSegment = false; 
+                } else {
+                    // Đang dừng -> Tua lùi 1 giây và Phát tiếp
+                    // Giới hạn không cho lùi về số âm
+                    videoPlayer.currentTime = Math.max(0, videoPlayer.currentTime - 1);
+                    videoPlayer.play();
+                    isPlayingSegment = true; // Bật lại công tắc để nó tự dừng khi hết câu
+                }
+                return;
+            }
+
+            // 1. Phím "=" để Gợi ý từ
+            if (e.key === '=') {
+                e.preventDefault(); 
+                triggerHint();
+                return;
+            }
+
+            // 2. Phím "Enter" để Kiểm tra lỗi / Đi tiếp
             if (e.key === 'Enter') {
                 e.preventDefault(); 
-                if (isSentenceCompleted) { btnNext.click(); } 
+                if (isSentenceCompleted) { 
+                    if (currentIndex < subtitles.length - 1) { btnNext.click(); } 
+                } 
                 else {
-                    const currentTime = new Date().getTime();
-                    if (currentTime - lastEnterTime < 500) { triggerHint(); lastEnterTime = 0; } 
-                    else { checkDictationLogic(); lastEnterTime = currentTime; }
+                    checkDictationLogic();
+                }
+                return;
+            }
+
+            // 3. Phím "Shift" để phát lại từ đầu câu
+            if (e.key === 'Shift') {
+                e.preventDefault();
+                playCurrentSegment();
+                return;
+            }
+
+            // 4. Khóa bàn phím khi câu đã hoàn thành đúng 100%
+            if (isSentenceCompleted) {
+                // Chỉ cho phép dùng các phím xóa, bôi đen, chuyển hướng
+                const allowedKeys = ['Backspace', 'Delete', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Shift', 'Control', 'Alt', 'Meta'];
+                if (!allowedKeys.includes(e.key)) {
+                    e.preventDefault(); 
                 }
             }
         });
